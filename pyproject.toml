@@ -1,0 +1,111 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kubernetes-zero-downtime"
+version = "0.1.0"
+description = "A small HTTP service rolled, scaled and drained on a three-node Kubernetes cluster under constant load, with a load generator that counts every failed request."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Sumit Srivastava" }]
+dependencies = [
+    "flask>=3.1,<4",
+    "gunicorn>=23,<26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "import-linter>=2.0",
+    "pip-audit>=2.7",
+    "pyyaml>=6",
+    "types-PyYAML",
+    "yamllint>=1.35",
+    "shellcheck-py>=0.10",
+]
+
+[project.scripts]
+zero-downtime-loadgen = "loadgen.interfaces.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "N", "C4", "RUF", "PT", "D100", "D101", "D103", "D104"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+
+# Test functions are named for the behavior they check; annotating every one adds noise, not safety.
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: runs the real gunicorn command and the load generator against it (make test-integration)",
+    "policy: renders the manifests with kubectl and checks them, no cluster needed",
+    "e2e: needs the local cluster from make up (make smoke)",
+]
+
+[tool.coverage.run]
+source = ["zero_downtime", "loadgen"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+[tool.importlinter]
+include_external_packages = true
+root_packages = ["zero_downtime", "loadgen"]
+
+[[tool.importlinter.contracts]]
+name = "Service layers: interfaces -> infrastructure -> application -> domain, never upward"
+type = "layers"
+layers = [
+    "zero_downtime.interfaces",
+    "zero_downtime.infrastructure",
+    "zero_downtime.application",
+    "zero_downtime.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Load generator layers: interfaces -> infrastructure -> application -> domain, never upward"
+type = "layers"
+layers = [
+    "loadgen.interfaces",
+    "loadgen.infrastructure",
+    "loadgen.application",
+    "loadgen.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain and application know nothing about Flask"
+type = "forbidden"
+source_modules = ["zero_downtime.domain", "zero_downtime.application", "loadgen.domain", "loadgen.application"]
+forbidden_modules = ["flask", "gunicorn"]
+
+[[tool.importlinter.contracts]]
+name = "The service and the load generator share no code"
+type = "independence"
+modules = ["zero_downtime", "loadgen"]
