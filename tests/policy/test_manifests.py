@@ -104,7 +104,8 @@ def test_pods_are_spread_over_nodes_ignoring_tainted_and_cordoned_ones(productio
 
 def test_the_load_generator_is_pinned_to_the_control_plane_node_that_is_never_drained(production):
     pod = _pod(named(production, "Deployment", "loadgen"))
-    assert pod["nodeSelector"] == {"node-role.kubernetes.io/control-plane": ""}
+    terms = pod["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"]
+    assert terms == [{"matchExpressions": [{"key": "node-role.kubernetes.io/control-plane", "operator": "Exists"}]}]
     assert any(t["key"] == "node-role.kubernetes.io/control-plane" for t in pod["tolerations"])
 
 
