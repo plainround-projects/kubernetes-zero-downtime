@@ -6,8 +6,8 @@ CLUSTER_NAME="${CLUSTER_NAME:-zero-downtime}"
 NAMESPACE="${NAMESPACE:-zero-downtime}"
 WEB_IMAGE="${WEB_IMAGE:-zero-downtime-web:0.1.0}"
 LOADGEN_IMAGE="${LOADGEN_IMAGE:-zero-downtime-loadgen:0.1.0}"
-KIND="$ROOT/.bin/kind"
-export ROOT CLUSTER_NAME NAMESPACE WEB_IMAGE LOADGEN_IMAGE KIND
+K3D="$ROOT/.bin/k3d"
+export ROOT CLUSTER_NAME NAMESPACE WEB_IMAGE LOADGEN_IMAGE K3D
 # A kubeconfig of its own: this project never reads or changes ~/.kube/config.
 export KUBECONFIG="${KUBECONFIG:-$ROOT/.kube/config}"
 

@@ -12,7 +12,7 @@ kubectl -n "$NAMESPACE" get pods -l app=web -o jsonpath='{range .items[*]}{.spec
 "$ROOT/scripts/loadctl.sh" reset >/dev/null
 trap 'kubectl uncordon "$node" >/dev/null 2>&1 || true' EXIT
 log "draining $node"
-kubectl drain "$node" --ignore-daemonsets --delete-emptydir-data --timeout=300s
+kubectl drain "$node" --ignore-daemonsets --delete-emptydir-data --timeout=600s
 sleep 5
 log "errors counted during the drain:"
 "$ROOT/scripts/loadctl.sh" stats

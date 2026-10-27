@@ -10,7 +10,7 @@ runs="${1:-1}"
 for run in $(seq 1 "$runs"); do
   "$ROOT/scripts/loadctl.sh" reset >/dev/null
   kubectl -n "$NAMESPACE" rollout restart deployment/web >/dev/null
-  kubectl -n "$NAMESPACE" rollout status deployment/web --timeout=300s >/dev/null
+  kubectl -n "$NAMESPACE" rollout status deployment/web --timeout=600s >/dev/null
   sleep 8
   printf 'rollout %s of %s: ' "$run" "$runs"
   "$ROOT/scripts/loadctl.sh" stats

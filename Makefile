@@ -25,12 +25,11 @@ $(STAMP): requirements-dev.lock pyproject.toml
 
 install: $(STAMP) ## create .venv from the lock file
 
-tools: ## download the pinned kind and kubeconform into .bin (checksum-verified)
+tools: ## download the pinned k3d and kubeconform into .bin (checksum-verified)
 	scripts/tools.sh
 
-up: tools ## create the 4-node kind cluster, install metrics-server, build and load both images, deploy
+up: tools ## create the 4-node k3d cluster, build and import both images, deploy
 	scripts/cluster-start.sh
-	scripts/metrics-server.sh
 	scripts/build-image.sh
 	scripts/deploy.sh $(OVERLAY)
 
@@ -92,7 +91,7 @@ docker-build: ## build both images without loading them anywhere
 	docker build --target service -t zero-downtime-web:0.1.0 .
 	docker build --target loadgen -t zero-downtime-loadgen:0.1.0 .
 
-down: ## delete the kind cluster and its kubeconfig
+down: ## delete the k3d cluster and its kubeconfig
 	scripts/cluster-down.sh
 
 clean: down

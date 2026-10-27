@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# Create the local kind cluster (idempotent) and wait for every node to be Ready.
+# Create the local k3d cluster (idempotent) and wait for its node to be Ready.
 set -euo pipefail
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 "$ROOT/scripts/tools.sh" >/dev/null
 mkdir -p "$(dirname "$KUBECONFIG")"
-if "$KIND" get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
+if "$K3D" cluster list --no-headers 2>/dev/null | awk '{print $1}' | grep -qx "$CLUSTER_NAME"; then
   log "cluster $CLUSTER_NAME already exists"
-  "$KIND" export kubeconfig --name "$CLUSTER_NAME" --kubeconfig "$KUBECONFIG"
+  "$K3D" cluster start "$CLUSTER_NAME" >/dev/null 2>&1 || true
 else
-  log "creating kind cluster $CLUSTER_NAME (Kubernetes 1.35, one control-plane node and three workers)"
-  "$KIND" create cluster --name "$CLUSTER_NAME" --config "$ROOT/cluster/kind-config.yaml" --kubeconfig "$KUBECONFIG" --wait 180s
+  log "creating k3d cluster $CLUSTER_NAME (Kubernetes 1.35, one server node and three agents)"
+  # The project's own kubeconfig is written below; ~/.kube/config is left alone.
+  "$K3D" cluster create "$CLUSTER_NAME" --config "$ROOT/cluster/k3d-config.yaml" \
+    --kubeconfig-update-default=false --kubeconfig-switch-context=false
 fi
-kubectl wait --for=condition=Ready nodes --all --timeout=180s
+"$K3D" kubeconfig write "$CLUSTER_NAME" --output "$KUBECONFIG" >/dev/null
+kubectl wait --for=condition=Ready nodes --all --timeout=600s
 kubectl get nodes

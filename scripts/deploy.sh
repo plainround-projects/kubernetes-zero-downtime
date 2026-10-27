@@ -8,9 +8,14 @@ require_cluster
 overlay="${1:-production}"
 [ -d "$ROOT/manifests/overlays/$overlay" ] || die "no overlay named $overlay"
 log "applying overlay $overlay"
+if [ "$overlay" != "production" ]; then
+  # kubectl apply does not delete what an overlay no longer contains; the earlier steps have no autoscaler
+  # or disruption budget, so remove them when going back to one of those steps.
+  kubectl -n "$NAMESPACE" delete horizontalpodautoscaler,poddisruptionbudget -l app.kubernetes.io/part-of=zero-downtime --ignore-not-found || true
+fi
 kubectl apply -k "$ROOT/manifests/overlays/$overlay"
-kubectl -n "$NAMESPACE" rollout status deployment/web --timeout=300s
-kubectl -n "$NAMESPACE" rollout status deployment/loadgen --timeout=300s
+kubectl -n "$NAMESPACE" rollout status deployment/web --timeout=600s
+kubectl -n "$NAMESPACE" rollout status deployment/loadgen --timeout=600s
 # The autoscaler (production only) may still be bringing the Deployment up to its minimum.
 for _ in $(seq 1 60); do
   ready="$(kubectl -n "$NAMESPACE" get deployment web -o jsonpath='{.status.readyReplicas}')"

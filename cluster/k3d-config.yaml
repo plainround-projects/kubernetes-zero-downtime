@@ -1,0 +1,50 @@
+# One server node and three agents, as the lesson asks for three worker nodes. Each node is a Docker
+# container running k3s, a certified Kubernetes distribution in a single binary (Kubernetes 1.35.8, k3s
+# v1.35.8-k3s1). Facts the lesson depends on:
+#   - The server is tainted so web pods run only on the three agents. The load generator tolerates the
+#     taint and is pinned to the server, which is never drained.
+#   - k3s bundles metrics-server (the autoscaler's CPU readings), so none is installed here.
+#   - Traefik, the service load balancer, local storage and the Helm controller are switched off; nothing here needs them. There is no k3d load
+#     balancer either, so the API server's port is published on the server node (a random free port).
+# Disk thresholds: the kubelet normally refuses to schedule pods (a disk-pressure taint) and deletes unused
+# images once the disk is 85% full. Docker Desktop's disk is shared with every image and volume on the
+# machine and is often fuller than that, so a local cluster that obeyed the defaults would sit Pending, or lose the
+# images just imported into it. Both limits are relaxed here; a real node keeps the defaults.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: zero-downtime
+servers: 1
+agents: 3
+image: rancher/k3s:v1.35.8-k3s1
+options:
+  k3d:
+    wait: true
+    timeout: 15m0s
+    disableLoadbalancer: true
+  k3s:
+    extraArgs:
+      - arg: --kubelet-arg=eviction-hard=nodefs.available<1%,imagefs.available<1%,nodefs.inodesFree<1%
+        nodeFilters:
+          - all
+      - arg: --kubelet-arg=image-gc-high-threshold=100
+        nodeFilters:
+          - all
+      - arg: --kubelet-arg=image-gc-low-threshold=99
+        nodeFilters:
+          - all
+      - arg: --disable=traefik
+        nodeFilters:
+          - server:*
+      - arg: --disable=servicelb
+        nodeFilters:
+          - server:*
+      - arg: --disable=local-storage
+        nodeFilters:
+          - server:*
+      - arg: --disable-helm-controller
+        nodeFilters:
+          - server:*
+      - arg: --node-taint=node-role.kubernetes.io/control-plane=true:NoSchedule
+        nodeFilters:
+          - server:*
