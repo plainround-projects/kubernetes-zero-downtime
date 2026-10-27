@@ -1,0 +1,6 @@
+# Step 1: the naive deployment. No probes, no preStop, defaults for the rollout. A rolling update under load
+# drops requests; the load generator counts them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base

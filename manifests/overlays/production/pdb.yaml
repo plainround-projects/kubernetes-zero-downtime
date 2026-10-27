@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/part-of: zero-downtime
+spec:
+  # Stated as "at most one pod unavailable" rather than "at least five available", so it stays right when
+  # the autoscaler changes the replica count.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: web

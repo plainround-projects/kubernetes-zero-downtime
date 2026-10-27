@@ -1,0 +1,18 @@
+# Step 3: capacity never drops during a rollout. maxUnavailable 0 means an old pod is removed only after a
+# new one is Ready; maxSurge 25% of six rounds up to two extra pods at a time.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../graceful
+patches:
+  - target:
+      kind: Deployment
+      name: web
+    patch: |-
+      - op: add
+        path: /spec/strategy
+        value:
+          type: RollingUpdate
+          rollingUpdate:
+            maxSurge: 25%
+            maxUnavailable: 0

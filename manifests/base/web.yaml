@@ -1,0 +1,80 @@
+# The service as the lesson's first step deploys it: six replicas, defaults everywhere that matters to a
+# rollout (no readiness probe, no preStop hook, the default 30-second grace period, the default 25% surge
+# and 25% unavailable). Each overlay adds one thing the lesson teaches.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels:
+    app: web
+    app.kubernetes.io/name: web
+    app.kubernetes.io/part-of: zero-downtime
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+        app.kubernetes.io/name: web
+        app.kubernetes.io/part-of: zero-downtime
+    spec:
+      serviceAccountName: web
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: zero-downtime-web
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: STARTUP_DELAY_SECONDS
+              value: "1"
+            - name: LATENCY_MIN_MS
+              value: "50"
+            - name: LATENCY_MAX_MS
+              value: "200"
+            - name: CPU_WORK_MS
+              value: "2"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/part-of: zero-downtime
+spec:
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
