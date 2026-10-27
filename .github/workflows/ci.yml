@@ -1,0 +1,50 @@
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  check:
+    name: Lint (ruff, mypy, import rules, yamllint, shellcheck, hadolint, kubeconform), unit and policy tests, audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: make lint
+      - run: make test
+      - run: make audit
+
+  integration:
+    name: The real gunicorn command (startup delay and graceful shutdown)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: make test-integration
+
+  cluster:
+    name: All four operations on a four-node k3d cluster, zero errors
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: make up
+      - run: make run
+      - run: make smoke
+        env:
+          # A shorter spike than the lesson's five minutes keeps the hosted run under the time limit.
+          SPIKE_SECONDS: "180"
+      - if: failure()
+        run: |
+          export KUBECONFIG="$PWD/.kube/config"
+          kubectl get pods -A -o wide || true
+          kubectl -n zero-downtime get events --sort-by=.lastTimestamp || true
+          kubectl get hpa -A || true
+      - if: always()
+        run: make down
