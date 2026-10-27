@@ -50,16 +50,16 @@ Every line is also checked by an automated cluster test, [tests/e2e/test_done_wh
 
 | # | Done when (from the lesson) | Command | What proves it |
 | --- | --- | --- | --- |
-| 1 | **Measure the naive rollout.** You have the number of failed requests during the rollout written down, and it is above zero. | `make deploy OVERLAY=naive`, `scripts/rollout-under-load.sh 1` | RESULT-1 |
-| 2 | **Add readiness and graceful shutdown.** A rollout under load completes with zero failed requests, three times in a row. | `make deploy OVERLAY=graceful`, `make run` | RESULT-2 |
-| 3 | **Tune the rollout.** A rollout of 6 replicas keeps at least 6 ready pods the whole time, checked with a watch on ready counts. | `make deploy OVERLAY=rolling-tuned`; `kubectl -n zero-downtime get deployment web -w` during `make run` | RESULT-3 |
-| 4 | **Autoscale on a spike.** Replicas grow, p99 latency returns near baseline, and the error count stays at zero; you also record how long scaling took. | `make deploy OVERLAY=production`, `make rate RPS=300`, `kubectl -n zero-downtime get hpa web -w`, `make stats` | RESULT-4 |
-| 5 | **Drain a node safely.** The drain completes with zero failed requests, and pods are spread so that no single node held more than half of them. | `make drain` | RESULT-5 |
-| 6 | **Scale down without errors.** Scale-down completes with zero failed requests, and the README has a table of all four operations, before and after, with the error counts. | `make rate RPS=100`, then watch `kubectl -n zero-downtime get hpa web -w` and `make stats`; the table is below | RESULT-6 |
+| 1 | **Measure the naive rollout.** You have the number of failed requests during the rollout written down, and it is above zero. | `make deploy OVERLAY=naive`, `scripts/rollout-under-load.sh 1` | Not yet demonstrated on a cluster: the cluster test was started but the machine stalled before it finished (see "Verification status" below). The command column is what to run. |
+| 2 | **Add readiness and graceful shutdown.** A rollout under load completes with zero failed requests, three times in a row. | `make deploy OVERLAY=graceful`, `make run` | Not yet demonstrated on a cluster: the cluster test was started but the machine stalled before it finished (see "Verification status" below). The command column is what to run. |
+| 3 | **Tune the rollout.** A rollout of 6 replicas keeps at least 6 ready pods the whole time, checked with a watch on ready counts. | `make deploy OVERLAY=rolling-tuned`; `kubectl -n zero-downtime get deployment web -w` during `make run` | Not yet demonstrated on a cluster: the cluster test was started but the machine stalled before it finished (see "Verification status" below). The command column is what to run. |
+| 4 | **Autoscale on a spike.** Replicas grow, p99 latency returns near baseline, and the error count stays at zero; you also record how long scaling took. | `make deploy OVERLAY=production`, `make rate RPS=300`, `kubectl -n zero-downtime get hpa web -w`, `make stats` | Not yet demonstrated on a cluster: the cluster test was started but the machine stalled before it finished (see "Verification status" below). The command column is what to run. |
+| 5 | **Drain a node safely.** The drain completes with zero failed requests, and pods are spread so that no single node held more than half of them. | `make drain` | Not yet demonstrated on a cluster: the cluster test was started but the machine stalled before it finished (see "Verification status" below). The command column is what to run. |
+| 6 | **Scale down without errors.** Scale-down completes with zero failed requests, and the README has a table of all four operations, before and after, with the error counts. | `make rate RPS=100`, then watch `kubectl -n zero-downtime get hpa web -w` and `make stats`; the table is below | Not yet demonstrated on a cluster: the cluster test was started but the machine stalled before it finished (see "Verification status" below). The command column is what to run. |
 
 ### The table of all four operations
 
-RESULT-TABLE
+Not filled in yet: it is written by `make smoke` to `logs/results.md` once the cluster test has run to the end.
 
 Only the rolling update has a naive measurement (the lesson's step 1). The other three operations are shown with the finished manifests; running them against the naive deployment would only repeat the same readiness and shutdown failures.
 
@@ -72,6 +72,10 @@ Only the rolling update has a naive measurement (the lesson's step 1). The other
 - **CPU request and the autoscaler.** Utilization is a percentage of the request. Each request computes for 2 ms, so CPU follows load and the autoscaler has something to respond to.
 - **Disruption budget and topology spread.** The budget (`maxUnavailable: 1`) lets a drain evict one web pod at a time. Spread across nodes (with `nodeTaintsPolicy: Honor`) means no node holds more than half the pods, so a drain never removes most of the service at once.
 - **Scale-down stabilization.** The autoscaler waits 60 seconds of low load before removing pods (the default is five minutes) and removes at most two every 30 seconds; those pods leave through the same graceful shutdown.
+
+## Verification status
+
+Unit tests, policy tests, the integration tests (real gunicorn: startup delay, graceful shutdown, the load generator program), lint and kubeconform pass. The cluster test (`make smoke`) has **not** completed on a cluster: the Docker VM on the build machine was saturated for hours and the k3s API server stopped answering during the first run, which failed on the naive-rollout step before the rest ran. Run `make up && make smoke` on an idle machine before relying on the numbers or the autoscaler settings (CPU request and `CPU_WORK_MS` were not yet calibrated against a real cluster).
 
 ## Stretch goals
 
