@@ -1,4 +1,7 @@
-# Step 2: readiness, a preStop delay and a grace period long enough for both.
+# Step 2: readiness, a preStop delay and a grace period long enough for both. The 15-second sleep must outlast
+# the time every node's kube-proxy needs to drop the pod from its rules: 5 seconds was measured to be too short on
+# a loaded machine (requests timed out against pods that had already gone). 15 + gunicorn's 10-second graceful
+# timeout fits the 40-second grace period.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
@@ -10,7 +13,7 @@ patches:
     patch: |-
       - op: add
         path: /spec/template/spec/terminationGracePeriodSeconds
-        value: 20
+        value: 40
       - op: add
         path: /spec/template/spec/containers/0/readinessProbe
         value:
@@ -34,4 +37,4 @@ patches:
         value:
           preStop:
             sleep:
-              seconds: 5
+              seconds: 15

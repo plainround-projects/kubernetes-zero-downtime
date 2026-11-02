@@ -48,6 +48,14 @@ def test_every_container_in_every_step_has_requests_and_limits_and_is_locked_dow
             assert not container["image"].endswith(":latest")
 
 
+@pytest.mark.parametrize("overlay", ["naive", "graceful", "rolling-tuned", "production"])
+def test_every_namespaced_object_of_every_step_is_in_the_zero_downtime_namespace(overlays, overlay):
+    """The autoscaler and the budget are added by the production overlay itself; they must not land in `default`."""
+    for doc in overlays[overlay]:
+        if doc["kind"] != "Namespace":
+            assert doc["metadata"].get("namespace") == "zero-downtime", (doc["kind"], doc["metadata"]["name"])
+
+
 def test_the_finished_web_service_has_both_probes_on_their_own_paths(production):
     container = _pod(_web(production))["containers"][0]
     assert container["readinessProbe"]["httpGet"]["path"] == "/readyz"

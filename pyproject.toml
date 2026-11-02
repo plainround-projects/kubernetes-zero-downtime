@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "kubernetes-zero-downtime"
 version = "0.1.0"
-description = "A small HTTP service rolled, scaled and drained on a three-node Kubernetes cluster under constant load, with a load generator that counts every failed request."
+description = "A small HTTP service rolled, scaled and drained on a four-node (one server, three workers) Kubernetes cluster under constant load, with a load generator that counts every failed request."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }

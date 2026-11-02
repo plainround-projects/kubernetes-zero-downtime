@@ -4,8 +4,9 @@
 #   - The server is tainted so web pods run only on the three agents. The load generator tolerates the
 #     taint and is pinned to the server, which is never drained.
 #   - k3s bundles metrics-server (the autoscaler's CPU readings), so none is installed here.
-#   - Traefik, the service load balancer, local storage and the Helm controller are switched off; nothing here needs them. There is no k3d load
-#     balancer either, so the API server's port is published on the server node (a random free port).
+#   - Traefik, the service load balancer, local storage and the Helm controller are switched off; nothing here needs
+#     them. There is no k3d load balancer either, so the API server's port is published on the server node (a
+#     random free port).
 # Disk thresholds: the kubelet normally refuses to schedule pods (a disk-pressure taint) and deletes unused
 # images once the disk is 85% full. Docker Desktop's disk is shared with every image and volume on the
 # machine and is often fuller than that, so a local cluster that obeyed the defaults would sit Pending, or lose the

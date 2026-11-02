@@ -1,7 +1,7 @@
 # The load generator runs inside the cluster so that its requests go through the Service and kube-proxy to
 # whichever pod is next, like any client would. (kubectl port-forward would pin all traffic to one pod.)
-# It is pinned to the server node (k3s labels it node-role.kubernetes.io/control-plane), which is never drained, so draining a worker cannot disturb the
-# thing that is counting errors.
+# It is pinned to the server node (k3s labels it node-role.kubernetes.io/control-plane), which is never drained,
+# so draining a worker cannot disturb the thing that is counting errors.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

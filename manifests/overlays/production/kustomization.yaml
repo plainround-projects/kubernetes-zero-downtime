@@ -2,6 +2,9 @@
 # service and the overlay `make up` deploys.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+# The autoscaler and the budget below are new objects of this overlay, outside the base: without this line they
+# would be created in whatever namespace kubectl defaults to, and the Deployment would never be scaled.
+namespace: zero-downtime
 resources:
   - ../rolling-tuned
   - hpa.yaml
