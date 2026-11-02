@@ -475,7 +475,7 @@ class Outcome(StrEnum):
         return self is not Outcome.OK
 ```
 
-`Outcome` is a `StrEnum` (an enumeration whose members are also strings): `OK`, `CONNECTION`, `TIMEOUT`, `HTTP_5XX` and `HTTP_OTHER`, with the text values `"ok"`, `"connection"` and so on, which become the JSON keys. The property `is_error` is true for everything except `OK`.
+`Outcome` is a `StrEnum` (an enumeration whose members are also strings): `OK`, `CONNECTION`, `TIMEOUT`, `HTTP_5XX` and `HTTP_OTHER`, with the text values `"ok"`, `"connection"`, `"timeout"`, `"http_5xx"` and `"http_other"`, which become the JSON keys. The property `is_error` is true for everything except `OK`.
 
 ```text
 @dataclass(frozen=True, slots=True)

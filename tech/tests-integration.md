@@ -20,7 +20,7 @@ Two facts of the lesson are only real in a real process. First, the one-second s
 
 `subprocess.Popen` starts a program without waiting for it. `socket.connect_ex` tries to connect and returns 0 on success or an error number (non-zero) if the port refuses, which is a cheap way to ask "is anybody listening?". `process.send_signal(signal.SIGTERM)` sends the same signal Kubernetes sends. Threads (`threading.Thread`) let the test send eight requests at once.
 
-A **free port** is found by binding port 0 (the operating system picks one). The environment variables `STARTUP_DELAY_SECONDS`, `LATENCY_MIN_MS` and so on configure the real program exactly as a Deployment would.
+A **free port** is found by binding port 0 (the operating system picks one). The environment variables `STARTUP_DELAY_SECONDS`, `LATENCY_MIN_MS`, `LATENCY_MAX_MS` and `CPU_WORK_MS` configure the real program exactly as a Deployment would.
 
 ## 5. Walkthrough of this repository's use
 
