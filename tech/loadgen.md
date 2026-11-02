@@ -14,7 +14,9 @@ Words used here:
 
 ## 2. Why this repository uses it
 
-A rolling update that drops one request in a thousand looks fine to a person clicking around, and is a failure at 100 rps. The generator counts every request by class (`connection`, `timeout`, `http_5xx`, `http_other`) and the lesson's verdict is its error count. It opens a **new connection for every request** on purpose: each request then meets whatever the Service routes it to, which is what exposes a pod that is not ready yet or is going away. It also counts `skipped` (a request that was due but could not be sent because all senders were busy) so that an overloaded generator can never be mistaken for a good result: a verdict is valid only when `skipped` is zero.
+A rolling update that drops one request in a thousand looks fine to a person clicking around, and is a failure at 100 rps. The generator counts every request by class (`connection`, `timeout`, `http_5xx`, `http_other`) and the lesson's verdict is its error count. It opens a **new connection for every request** on purpose: each request then meets whatever the Service routes it to, which is what exposes a pod that is not ready yet or is going away. It also counts `skipped` (a request that was due but could not be sent because all senders were busy) so that an overloaded generator can never be mistaken for a good result: a verdict is valid only when `skipped` is zero. In the same spirit it counts `late_starts` (a request that began more than 0.1 s after it was due because the generator's own threads were held up), and a window with late starts is void.
+
+A second measurement trap is worth knowing. When a connection fails, the Linux connection-tracking table keeps a half-open entry for 120 seconds that remembers which pod the Service chose. If a later connection happens to use the same *source port*, it is matched to that entry and sent to the same dead pod, so it fails too, although the Service no longer lists that pod. In this project that made a clean graceful rollout appear to fail about 0.1 to 0.4% of requests for two minutes after the naive step had produced its failures. The generator therefore never reuses a source port that failed within the last 125 seconds.
 
 ## 3. Where it appears
 
@@ -23,7 +25,7 @@ A rolling update that drops one request in a thousand looks fine to a person cli
 | `src/loadgen/domain/pacer.py` | The fixed-rate schedule. |
 | `src/loadgen/domain/stats.py` | Counters, percentiles and the snapshot. |
 | `src/loadgen/application/runner.py` | Sends what is due, with at most N requests in flight. |
-| `src/loadgen/infrastructure/http_requester.py` | One HTTP request on a new connection, classified. |
+| `src/loadgen/infrastructure/http_requester.py` | One HTTP request on a new connection, classified; holds back the source ports of failed requests. |
 | `src/loadgen/interfaces/control.py` | A tiny HTTP API to read and reset the counters and change the rate. |
 | `src/loadgen/interfaces/cli.py` | The program: start, serve the control API, print the final counts on SIGTERM. |
 | `manifests/base/loadgen.yaml` | The pod that runs it (see `kubernetes.md`). |
@@ -73,6 +75,10 @@ class Pacer:
 The docstring describes **open-loop pacing**: sends are due every 1/rate seconds from a start time, so a slow response never delays the next send, and a stall in the sender is caught up by sending the missed ones together. `Pacer.__init__` validates the rate, stores `_interval = 1.0 / rate_per_second` (seconds between sends) and `_next_due = start` (a reading of the monotonic clock). `_check` is a static method (it needs no instance): the rate must be above 0 and at most 10,000, otherwise `InvalidRateError`.
 
 ```text
+    def lateness(self, now: float) -> float:
+        """How many seconds the oldest unsent request is overdue at `now` (0.0 when none is due)."""
+        return max(0.0, now - self._next_due)
+
     def due(self, now: float) -> int:
         """How many sends are due at `now`; advances the schedule past them."""
         count = 0
@@ -87,7 +93,11 @@ The docstring describes **open-loop pacing**: sends are due every 1/rate seconds
 
     def set_rate(self, rate_per_second: float, now: float) -> None:
         """Change the rate from `now` on, without a burst or a gap.
+```
 
+`lateness(now)` returns how many seconds the oldest unsent request is overdue: `max(0.0, now - self._next_due)`, which is 0.0 when nothing is due. The runner uses it to notice that its own thread was held up. `due(now)` loops `while self._next_due <= now`, adding one interval to `_next_due` and counting, and returns the count: the number of sends owed. `seconds_until_next(now)` returns the time left until the next send, never negative. `set_rate(rate, now)` begins; its docstring says it changes the rate from `now` on, without a burst or a gap.
+
+```text
         The next send is due at the earlier of the old schedule and one new interval from now, so raising
         the rate takes effect at once and lowering it does not delay a send that was already due.
         """
@@ -96,7 +106,7 @@ The docstring describes **open-loop pacing**: sends are due every 1/rate seconds
         self._next_due = max(now, min(self._next_due, now + self._interval))
 ```
 
-`due(now)` loops `while self._next_due <= now`, adding one interval to `_next_due` and counting, and returns the count: the number of sends owed. `seconds_until_next(now)` returns the time left until the next send, never negative (`max(0.0, ...)`). `set_rate(rate, now)` validates the new rate, sets the new interval and moves `_next_due` to `max(now, min(old _next_due, now + new interval))`: the earlier of the old schedule and one new interval from now, but never in the past, so raising the rate acts immediately and lowering it never delays a send that was already due.
+The docstring finishes: the next send is due at the earlier of the old schedule and one new interval from now, so raising the rate takes effect at once and lowering it does not delay a send that was already due. The body validates the new rate, sets the new interval and moves `_next_due` to `max(now, min(old _next_due, now + new interval))`: never in the past.
 
 ### `src/loadgen/domain/stats.py`
 
@@ -135,6 +145,7 @@ Imports: `math`, `threading` and `dataclass`. `percentile(sorted_values, fractio
     http_5xx: int
     http_other: int
     skipped: int
+    late_starts: int
     p50_ms: float
     p99_ms: float
     max_ms: float
@@ -145,7 +156,7 @@ Imports: `math`, `threading` and `dataclass`. `percentile(sorted_values, fractio
         return self.connection + self.timeout + self.http_5xx + self.http_other
 ```
 
-The `Snapshot` fields are counts (`total`, `ok`, `connection`, `timeout`, `http_5xx`, `http_other`, `skipped`) and latencies in milliseconds (`p50_ms`, `p99_ms`, `max_ms`). The property `errors` adds the four error classes: connection errors, timeouts, 5xx statuses and other non-2xx statuses.
+The `Snapshot` fields are counts (`total`, `ok`, `connection`, `timeout`, `http_5xx`, `http_other`, `skipped`, `late_starts`) and latencies in milliseconds (`p50_ms`, `p99_ms`, `max_ms`). `late_starts` counts requests that began more than 0.1 s after they were due: the generator's own threads were held up, so those requests' times include the generator's delay. The property `errors` adds the four error classes: connection errors, timeouts, 5xx statuses and other non-2xx statuses.
 
 ```text
     def as_dict(self) -> dict[str, float | int]:
@@ -159,6 +170,7 @@ The `Snapshot` fields are counts (`total`, `ok`, `connection`, `timeout`, `http_
             "http_5xx": self.http_5xx,
             "http_other": self.http_other,
             "skipped": self.skipped,
+            "late_starts": self.late_starts,
             "p50_ms": round(self.p50_ms, 1),
             "p99_ms": round(self.p99_ms, 1),
             "max_ms": round(self.max_ms, 1),
@@ -169,7 +181,7 @@ class StatsWindow:
     """Thread-safe accumulator. `skipped` counts requests the generator itself could not send in time."""
 ```
 
-`as_dict` returns the snapshot as plain JSON-ready values with the `errors` total included and the latencies rounded to one decimal. `StatsWindow` begins: a thread-safe accumulator in which `skipped` counts requests the generator itself could not send in time.
+`as_dict` returns the snapshot as plain JSON-ready values with the `errors` total included, `late_starts` and the latencies rounded to one decimal. `StatsWindow` begins: a thread-safe accumulator in which `skipped` counts requests the generator itself could not send in time.
 
 ```text
     def __init__(self) -> None:
@@ -178,6 +190,7 @@ class StatsWindow:
         self._counts = dict.fromkeys(Outcome, 0)
         self._latencies: list[float] = []
         self._skipped = 0
+        self._late_starts = 0
 
     def record(self, sample: Sample) -> None:
         """Count one finished request."""
@@ -189,16 +202,21 @@ class StatsWindow:
         """Count one request that was due but not sent because every sender was busy."""
         with self._lock:
             self._skipped += 1
+```
+
+The constructor creates a `threading.Lock`, a dictionary `dict.fromkeys(Outcome, 0)` (a zero for every outcome class), an empty latency list, a skipped counter and a late-start counter. `record(sample)` adds one finished request under the lock; `skip()` counts one unsent request.
+
+```text
+    def late(self, count: int = 1) -> None:
+        """Count requests that started later than the generator's tolerance after they were due."""
+        with self._lock:
+            self._late_starts += count
 
     def snapshot(self) -> Snapshot:
         """Read the window without changing it."""
         with self._lock:
             return self._build()
-```
 
-The constructor creates a `threading.Lock`, a dictionary `dict.fromkeys(Outcome, 0)` (a zero for every outcome class), an empty latency list and a skipped counter. `record(sample)` adds one finished request under the lock; `skip()` counts one unsent request; `snapshot()` reads the window without changing it.
-
-```text
     def reset(self) -> Snapshot:
         """Return the window's final reading and start a new, empty one."""
         with self._lock:
@@ -206,10 +224,11 @@ The constructor creates a `threading.Lock`, a dictionary `dict.fromkeys(Outcome,
             self._counts = dict.fromkeys(Outcome, 0)
             self._latencies = []
             self._skipped = 0
+            self._late_starts = 0
             return final
 ```
 
-`reset()` takes the lock, builds the final reading, then empties the counters, the list and `skipped`, and returns the final reading: reading and clearing happen atomically so no request is counted twice or lost.
+`late(count=1)` adds to the late-start counter under the lock. `snapshot()` reads the window without changing it. `reset()` takes the lock, builds the final reading, then empties the counters, the list, `skipped` and `late_starts`, and returns the final reading: reading and clearing happen atomically so no request is counted twice or lost.
 
 ```text
     def _build(self) -> Snapshot:
@@ -222,13 +241,14 @@ The constructor creates a `threading.Lock`, a dictionary `dict.fromkeys(Outcome,
             http_5xx=self._counts[Outcome.HTTP_5XX],
             http_other=self._counts[Outcome.HTTP_OTHER],
             skipped=self._skipped,
+            late_starts=self._late_starts,
             p50_ms=percentile(ordered, 0.50) * 1000,
             p99_ms=percentile(ordered, 0.99) * 1000,
             max_ms=(ordered[-1] * 1000) if ordered else 0.0,
         )
 ```
 
-`_build()` sorts the latencies once and returns a `Snapshot`: totals from the counters, and p50, p99 and the maximum converted from seconds to milliseconds (the maximum is 0.0 for an empty window).
+`_build()` sorts the latencies once and returns a `Snapshot`: totals from the counters, `skipped`, `late_starts`, and p50, p99 and the maximum converted from seconds to milliseconds (the maximum is 0.0 for an empty window).
 
 ### `src/loadgen/application/runner.py`
 
@@ -243,6 +263,8 @@ from loadgen.application.ports import Clock, Executor, Requester
 from loadgen.domain.pacer import Pacer
 from loadgen.domain.stats import Snapshot, StatsWindow
 
+LATE_SECONDS = 0.1
+
 
 class LoadRunner:
     """Drives a Pacer on one thread and hands each due request to an Executor.
@@ -250,12 +272,16 @@ class LoadRunner:
     At most `max_in_flight` requests run at once. A request that is due when all senders are busy is not
     queued (queuing would hide an overloaded generator as extra latency); it is counted as `skipped`, and a
     verdict is only valid when `skipped` is zero.
-    """
 ```
 
-`LoadRunner` drives a `Pacer` on one thread and hands each due request to an `Executor`. The docstring states the key rule: at most `max_in_flight` requests run at once; a request due when all senders are busy is not queued (queueing would hide an overloaded generator as extra latency), it is counted as `skipped`, and a verdict is only valid when `skipped` is zero.
+`LATE_SECONDS = 0.1` is the tolerance for a late start. `LoadRunner` drives a `Pacer` on one thread and hands each due request to an `Executor`. The docstring states the first key rule: at most `max_in_flight` requests run at once; a request due when all senders are busy is not queued (queueing would hide an overloaded generator as extra latency), it is counted as `skipped`, and a verdict is only valid when `skipped` is zero.
 
 ```text
+    A request that starts more than LATE_SECONDS after it was due (the pacer thread or a sender thread was held
+    up, for example by a busy machine) is counted as `late_starts`: its measured time includes the generator's own
+    delay, so a window with late starts is not a valid verdict either.
+    """
+
     def __init__(
         self, requester: Requester, clock: Clock, executor: Executor, rate_per_second: float, max_in_flight: int
     ) -> None:
@@ -271,17 +297,17 @@ class LoadRunner:
         self._in_flight = 0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+```
 
+The second rule: a request that starts more than `LATE_SECONDS` after it was due (the pacer thread or a sender thread was held up, for example by a busy machine) is counted as `late_starts`, because its measured time includes the generator's own delay, so a window with late starts is not a valid verdict either. The constructor stores the requester, clock, executor, rate and limit, creates the `StatsWindow` and the `Pacer`, a lock, an in-flight counter, a `threading.Event` used as a stop flag and a placeholder for the thread.
+
+```text
     @property
     def rate(self) -> float:
         """The current target rate in requests per second."""
         with self._lock:
             return self._rate
-```
 
-The constructor stores the requester, clock, executor, rate and limit, creates the `StatsWindow` and the `Pacer`, a lock, an in-flight counter, a `threading.Event` used as a stop flag and a placeholder for the thread. The property `rate` returns the current target rate under the lock.
-
-```text
     def start(self) -> None:
         """Begin sending on a background thread."""
         self._thread = threading.Thread(target=self._loop, name="pacer", daemon=True)
@@ -294,7 +320,11 @@ The constructor stores the requester, clock, executor, rate and limit, creates t
             self._thread.join()
         self._executor.shutdown()
         return self._window.reset()
+```
 
+The property `rate` returns the current target rate under the lock. `start()` creates a daemon thread (one that does not keep the program alive) named `pacer` running `_loop`. `stop()` sets the stop flag, waits for the thread (`join`), shuts the executor down (waiting for requests in flight) and returns the window's final reading.
+
+```text
     def set_rate(self, rate_per_second: float) -> None:
         """Change the rate without a burst or a gap."""
         with self._lock:
@@ -304,21 +334,24 @@ The constructor stores the requester, clock, executor, rate and limit, creates t
     def snapshot(self) -> Snapshot:
         """Read the current window."""
         return self._window.snapshot()
-```
 
-`start()` creates a daemon thread (one that does not keep the program alive) named `pacer` running `_loop`. `stop()` sets the stop flag, waits for the thread (`join`), shuts the executor down (waiting for requests in flight) and returns the window's final reading. `set_rate` changes the pacer's rate and the stored rate under the lock. `snapshot()` reads the window.
-
-```text
     def reset(self) -> Snapshot:
         """Return the current window's reading and start a new one."""
         return self._window.reset()
+```
 
+`set_rate` changes the pacer's rate and the stored rate under the lock. `snapshot()` reads the window. `reset()` returns the window's reading and starts a new window.
+
+```text
     def tick(self) -> float:
         """Send everything that is due now and return how long to wait for the next one."""
         with self._lock:
             now = self._clock.now()
+            overdue = self._pacer.lateness(now)
             due = self._pacer.due(now)
             wait = self._pacer.seconds_until_next(now)
+        if due and overdue > LATE_SECONDS:
+            self._window.late(due)
         for _ in range(due):
             self._send_one()
         return wait
@@ -328,7 +361,7 @@ The constructor stores the requester, clock, executor, rate and limit, creates t
             self._clock.sleep(min(self.tick(), 0.05))
 ```
 
-`reset()` returns the window's reading and starts a new window. `tick()` is the heart: under the lock it reads the time, asks the pacer how many sends are due and how long until the next; then outside the lock it calls `_send_one` that many times and returns the wait. `_loop()` repeats until stopped: sleep for the smaller of that wait and 0.05 s (so the thread wakes at least 20 times a second).
+`tick()` is the heart: under the lock it reads the time, asks the pacer how overdue the oldest unsent request is (`overdue`), how many sends are due and how long until the next. Then, outside the lock: if sends are due and the pacer was overdue by more than `LATE_SECONDS`, all of them are counted as late starts (the pacer thread itself was stalled); then it calls `_send_one` that many times and returns the wait. `_loop()` repeats until stopped: sleep for the smaller of that wait and 0.05 s (so the thread wakes at least 20 times a second).
 
 ```text
     def _send_one(self) -> None:
@@ -337,9 +370,12 @@ The constructor stores the requester, clock, executor, rate and limit, creates t
                 self._window.skip()
                 return
             self._in_flight += 1
-        self._executor.submit(self._run_request)
+        due_at = self._clock.now()
+        self._executor.submit(lambda: self._run_request(due_at))
 
-    def _run_request(self) -> None:
+    def _run_request(self, due_at: float) -> None:
+        if self._clock.now() - due_at > LATE_SECONDS:
+            self._window.late()
         try:
             self._window.record(self._requester.request())
         finally:
@@ -347,7 +383,7 @@ The constructor stores the requester, clock, executor, rate and limit, creates t
                 self._in_flight -= 1
 ```
 
-`_send_one()` under the lock either counts a skip and returns (all senders busy) or increments the in-flight counter, then submits `_run_request` to the executor. `_run_request()` records the requester's sample and, in a `finally` block that always runs, decrements the in-flight counter.
+`_send_one()` under the lock either counts a skip and returns (all senders busy) or increments the in-flight counter; it then notes `due_at`, the time of the decision, and submits `_run_request(due_at)` to the executor (a `lambda` carries the value). `_run_request(due_at)` first checks whether the request is starting more than `LATE_SECONDS` after `due_at` (the sender threads were busy) and counts a late start if so; then it records the requester's sample and, in a `finally` block that always runs, decrements the in-flight counter.
 
 ### `src/loadgen/infrastructure/http_requester.py`
 
@@ -357,19 +393,68 @@ The constructor stores the requester, clock, executor, rate and limit, creates t
 from __future__ import annotations
 
 import http.client
+import socket
+import threading
 import time
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 from loadgen.domain.outcome import Outcome, Sample
+
+# Linux keeps a half-open connection in its connection-tracking table for 120 seconds, with the destination the
+# Service chose for it. A new connection that reuses the same source port is matched to that entry and sent to
+# the same (dead or not yet ready) pod again, so it times out too. A port that just failed is not used again for
+# a little longer than that.
+QUARANTINE_SECONDS = 125.0
+BIND_ATTEMPTS = 50
+```
+
+The docstring says what the module is. The imports: `http.client` (Python's low-level HTTP client), `socket` (the operating system's network endpoints), `threading`, `time`, `Callable` (a type for anything callable) and `urlsplit` (splits a URL into parts), then the outcome types. The long comment explains why the file keeps a list of recently failed source ports. Linux keeps a half-open connection in its connection-tracking table (the kernel's memory of every connection, which Kubernetes' Service rules rely on) for 120 seconds, together with the pod the Service chose for it. A new connection that reuses the same source port is matched to that entry and sent to the same dead or not-yet-ready pod again, so it times out too, even though the Service no longer lists that pod. So a port that just failed is not used again for a little longer than 120 seconds: `QUARANTINE_SECONDS = 125.0`. `BIND_ATTEMPTS = 50` limits how many times a socket is re-bound to find an allowed port.
+
+```text
+class PortQuarantine:
+    """Source ports that recently carried a failed request, each held back until its expiry time."""
+
+    def __init__(self, hold_seconds: float = QUARANTINE_SECONDS, clock: Callable[[], float] = time.monotonic) -> None:
+        """Hold each added port for `hold_seconds` on `clock`."""
+        self._hold = hold_seconds
+        self._clock = clock
+        self._until: dict[int, float] = {}
+        self._lock = threading.Lock()
+
+    def add(self, port: int) -> None:
+        """Hold a port back from now on."""
+        with self._lock:
+            self._until[port] = self._clock() + self._hold
+
+    def __contains__(self, port: object) -> bool:
+        """True while the port is held back; expired entries are forgotten."""
+        with self._lock:
+            now = self._clock()
+            for expired in [held for held, until in self._until.items() if until <= now]:
+                del self._until[expired]
+            return port in self._until
+```
+
+`PortQuarantine` holds the ports of recently failed requests. The constructor takes how long to hold (default 125 s) and a clock function (default `time.monotonic`, replaceable in tests), a dictionary from port to expiry time and a lock, because many sender threads use it at once. `add(port)` records `now + hold` under the lock. `__contains__` makes `port in quarantine` work: under the lock it forgets every entry whose time has passed (a list comprehension finds them first so the dictionary is not changed while being read) and then reports whether the port is still held.
+
+```text
+    def __len__(self) -> int:
+        """How many ports are held back."""
+        with self._lock:
+            return len(self._until)
 
 
 class HttpRequester:
     """Opens a new connection per request on purpose: each request then meets whatever the Service routes it
     to, which is what exposes a pod that is not ready or is going away. It never raises; failures are samples.
+
+    The source port of a request that fails is held back (see PortQuarantine), so that one failure cannot make
+    later requests fail for the same stale reason and be counted as if the pods had failed them.
     """
 ```
 
-The module sends one HTTP GET and classifies it. The docstring of `HttpRequester` explains the new connection per request and that it never raises: failures are samples.
+`__len__` returns how many ports are held (`len(quarantine)`). `HttpRequester` begins. Its docstring keeps the earlier rule (a new connection per request, so each request meets whatever the Service routes it to; it never raises, failures are samples) and adds the new one: the source port of a request that fails is held back, so one failure cannot make later requests fail for the same stale reason and be counted as if the pods had failed them.
 
 ```text
     def __init__(self, url: str, timeout_seconds: float) -> None:
@@ -381,30 +466,57 @@ The module sends one HTTP GET and classifies it. The docstring of `HttpRequester
         self._port = parts.port or 80
         self._path = parts.path or "/"
         self._timeout = timeout_seconds
+        self.quarantine = PortQuarantine()
 
     def request(self) -> Sample:
         """Send one request and classify what happened."""
         started = time.monotonic()
         outcome = self._attempt()
         return Sample(outcome, time.monotonic() - started)
+
+    def _attempt(self) -> Outcome:
+        outcome, port = self._send()
+        if outcome.is_error and port:
+            self.quarantine.add(port)
+        return outcome
 ```
 
-The constructor parses the URL once with `urlsplit`; it requires the `http` scheme and a host, otherwise `ValueError`; it stores the host, the port (80 by default), the path (`/` by default) and the timeout. `request()` notes the start time on the monotonic clock, calls `_attempt()` and returns a `Sample` with the outcome and the elapsed seconds.
+The constructor parses the URL once as before and creates the `quarantine` (public so tests can read it). `request()` notes the start time, calls `_attempt()` and returns a `Sample` with the outcome and the elapsed seconds. `_attempt()` calls `_send()`, which returns the outcome and the local port used; if the outcome is an error and a port was used (`port` is not 0), the port is added to the quarantine; then the outcome is returned.
 
 ```text
-    def _attempt(self) -> Outcome:
+    def _send(self) -> tuple[Outcome, int]:
+        """One request on a new connection; returns its outcome and the local port it used (0 if none)."""
         connection = http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
+        port = 0
         try:
+            connection.sock = self._bound_socket()
+            port = connection.sock.getsockname()[1]
+            connection.sock.connect((self._host, self._port))
             connection.request("GET", self._path, headers={"Connection": "close"})
             response = connection.getresponse()
             response.read()
-            return self._classify(response.status)
+            return self._classify(response.status), port
         except TimeoutError:
-            return Outcome.TIMEOUT
+            return Outcome.TIMEOUT, port
         except (OSError, http.client.HTTPException):
-            return Outcome.CONNECTION
+            return Outcome.CONNECTION, port
         finally:
             connection.close()
+```
+
+`_send()` creates an `HTTPConnection` (which is not connected yet) and sets `port = 0`. In the `try`: `connection.sock = self._bound_socket()` hands the connection a socket that is bound to an allowed local port but not connected, so the library will use it instead of opening its own; `port` is read from it with `getsockname()[1]`; `connect` then performs the TCP handshake with the target; the request is sent with `Connection: close`, the response is read completely and `_classify` maps the status. A `TimeoutError` becomes `Outcome.TIMEOUT`; any other `OSError` (refused, reset, unreachable) or `HTTPException` becomes `Outcome.CONNECTION`; both return the port so a failed one can be held back. `finally: connection.close()` always releases the socket.
+
+```text
+    def _bound_socket(self) -> socket.socket:
+        """A socket bound to a free local port that is not held back (not yet connected)."""
+        for attempt in range(BIND_ATTEMPTS):
+            candidate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            candidate.settimeout(self._timeout)
+            candidate.bind(("", 0))
+            if attempt == BIND_ATTEMPTS - 1 or candidate.getsockname()[1] not in self.quarantine:
+                return candidate
+            candidate.close()
+        raise AssertionError("unreachable")
 
     @staticmethod
     def _classify(status: int) -> Outcome:
@@ -413,7 +525,7 @@ The constructor parses the URL once with `urlsplit`; it requires the `http` sche
         return Outcome.HTTP_5XX if status >= 500 else Outcome.HTTP_OTHER
 ```
 
-`_attempt()` opens an `HTTPConnection` with the timeout, sends `GET <path>` with the header `Connection: close`, reads the whole body, and classifies the status. A `TimeoutError` becomes `Outcome.TIMEOUT`; any other `OSError` (refused, reset, unreachable) or `HTTPException` becomes `Outcome.CONNECTION`; `finally: connection.close()` always releases the socket. `_classify(status)` maps 200 to 299 to `OK`, 500 and above to `HTTP_5XX` and everything else to `HTTP_OTHER`.
+`_bound_socket()` tries up to 50 times: create a TCP socket (`AF_INET`, `SOCK_STREAM`), give it the request timeout, `bind(("", 0))` (any local address, port 0 meaning "the operating system chooses a free port") and read which port was chosen. If it is the last attempt, or the port is not in the quarantine, the socket is returned; otherwise it is closed and another is tried. The final `raise AssertionError("unreachable")` is for the type checker. `_classify(status)` maps 200 to 299 to `OK`, 500 and above to `HTTP_5XX` and everything else to `HTTP_OTHER`.
 
 ### `src/loadgen/interfaces/control.py`
 

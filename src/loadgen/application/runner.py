@@ -8,6 +8,8 @@ from loadgen.application.ports import Clock, Executor, Requester
 from loadgen.domain.pacer import Pacer
 from loadgen.domain.stats import Snapshot, StatsWindow
 
+LATE_SECONDS = 0.1
+
 
 class LoadRunner:
     """Drives a Pacer on one thread and hands each due request to an Executor.
@@ -15,6 +17,10 @@ class LoadRunner:
     At most `max_in_flight` requests run at once. A request that is due when all senders are busy is not
     queued (queuing would hide an overloaded generator as extra latency); it is counted as `skipped`, and a
     verdict is only valid when `skipped` is zero.
+
+    A request that starts more than LATE_SECONDS after it was due (the pacer thread or a sender thread was held
+    up, for example by a busy machine) is counted as `late_starts`: its measured time includes the generator's own
+    delay, so a window with late starts is not a valid verdict either.
     """
 
     def __init__(
@@ -70,8 +76,11 @@ class LoadRunner:
         """Send everything that is due now and return how long to wait for the next one."""
         with self._lock:
             now = self._clock.now()
+            overdue = self._pacer.lateness(now)
             due = self._pacer.due(now)
             wait = self._pacer.seconds_until_next(now)
+        if due and overdue > LATE_SECONDS:
+            self._window.late(due)
         for _ in range(due):
             self._send_one()
         return wait
@@ -86,9 +95,12 @@ class LoadRunner:
                 self._window.skip()
                 return
             self._in_flight += 1
-        self._executor.submit(self._run_request)
+        due_at = self._clock.now()
+        self._executor.submit(lambda: self._run_request(due_at))
 
-    def _run_request(self) -> None:
+    def _run_request(self, due_at: float) -> None:
+        if self._clock.now() - due_at > LATE_SECONDS:
+            self._window.late()
         try:
             self._window.record(self._requester.request())
         finally:

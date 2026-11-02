@@ -83,3 +83,21 @@ def test_a_rate_outside_the_range_is_rejected(rate):
         Pacer(rate, 0.0)
     with pytest.raises(InvalidRateError):
         Pacer(10, 0.0).set_rate(rate, 0.0)
+
+
+def test_the_pacer_reports_how_overdue_the_oldest_send_is():
+    pacer = Pacer(10, start=0.0)
+    assert pacer.lateness(0.0) == 0.0
+    assert pacer.lateness(0.35) == pytest.approx(0.35)
+    pacer.due(0.35)
+    assert pacer.lateness(0.35) == 0.0
+
+
+def test_late_starts_are_counted_and_cleared_by_reset():
+    window = StatsWindow()
+    window.late()
+    window.late(3)
+    assert window.snapshot().late_starts == 4
+    assert window.snapshot().as_dict()["late_starts"] == 4
+    assert window.reset().late_starts == 4
+    assert window.snapshot().late_starts == 0

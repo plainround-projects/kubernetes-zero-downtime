@@ -7,7 +7,7 @@ import pytest
 
 from loadgen.application.runner import LoadRunner
 from loadgen.domain.outcome import Outcome
-from loadgen.infrastructure.http_requester import HttpRequester
+from loadgen.infrastructure.http_requester import HttpRequester, PortQuarantine
 from loadgen.infrastructure.runtime import PoolExecutor, SystemClock
 from loadgen.infrastructure.settings import ConfigurationError, Settings
 from loadgen.interfaces.control import make_server
@@ -108,3 +108,39 @@ def test_the_control_api_reads_resets_and_changes_the_rate(target):
         runner.stop()
         server.shutdown()
         server.server_close()
+
+
+def test_a_held_back_port_is_forgotten_after_its_time():
+    now = [0.0]
+    quarantine = PortQuarantine(hold_seconds=10, clock=lambda: now[0])
+    quarantine.add(40000)
+    assert 40000 in quarantine
+    assert 40001 not in quarantine
+    assert len(quarantine) == 1
+    now[0] = 10.0
+    assert 40000 not in quarantine
+    assert len(quarantine) == 0
+
+
+def test_a_failed_request_holds_its_source_port_back_and_a_good_one_does_not(target):
+    requester = HttpRequester(target + "/200", 2)
+    assert requester.request().outcome is Outcome.OK
+    assert len(requester.quarantine) == 0
+    failing = HttpRequester(target + "/503", 2)
+    assert failing.request().outcome is Outcome.HTTP_5XX
+    assert len(failing.quarantine) == 1
+
+
+def test_a_timeout_holds_its_source_port_back_and_a_new_request_avoids_it():
+    import socket
+
+    with socket.socket() as silent:
+        silent.bind(("127.0.0.1", 0))
+        silent.listen(1)
+        requester = HttpRequester(f"http://127.0.0.1:{silent.getsockname()[1]}/", 0.2)
+        assert requester.request().outcome is Outcome.TIMEOUT
+        held = next(iter(requester.quarantine._until))
+        for _ in range(20):
+            probe = requester._bound_socket()
+            assert probe.getsockname()[1] != held
+            probe.close()

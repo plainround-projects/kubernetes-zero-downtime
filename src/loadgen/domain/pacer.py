@@ -21,6 +21,10 @@ class Pacer:
         if not 0 < rate_per_second <= 10_000:
             raise InvalidRateError(f"rate must be between 0 and 10000 requests per second, got {rate_per_second}")
 
+    def lateness(self, now: float) -> float:
+        """How many seconds the oldest unsent request is overdue at `now` (0.0 when none is due)."""
+        return max(0.0, now - self._next_due)
+
     def due(self, now: float) -> int:
         """How many sends are due at `now`; advances the schedule past them."""
         count = 0

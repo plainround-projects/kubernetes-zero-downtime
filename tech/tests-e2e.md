@@ -274,6 +274,7 @@ pytestmark = pytest.mark.e2e
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE_RPS = 100
 SPIKE_RPS = 300
+REPEATS = 3
 SPIKE_SECONDS = int(os.environ.get("SPIKE_SECONDS", "300"))
 RESULTS: dict[str, list[str]] = {}
 
@@ -287,7 +288,7 @@ def record(operation: str, *, before: str | None = None, after: str | None = Non
         row[1] = after
 ```
 
-`pytestmark = pytest.mark.e2e`; `BASELINE_RPS = 100`, `SPIKE_RPS = 300`; `SPIKE_SECONDS` read from the environment with `os.environ.get(..., "300")` and converted to an integer; `RESULTS` is a dictionary that collects the table rows. `record(operation, before=None, after=None)` fills one row of the table the README quotes; each cell can be set by a different test; the default row is `["N/A (not run naive)", "not run"]`.
+`pytestmark = pytest.mark.e2e`; `BASELINE_RPS = 100`, `SPIKE_RPS = 300`; `REPEATS = 3` is how many times a void rollout window is measured again; `SPIKE_SECONDS` read from the environment with `os.environ.get(..., "300")` and converted to an integer; `RESULTS` is a dictionary that collects the table rows. `record(operation, before=None, after=None)` fills one row of the table the README quotes; each cell can be set by a different test; the default row is `["N/A (not run naive)", "not run"]`.
 
 ```text
 @pytest.fixture(scope="module")
@@ -351,17 +352,37 @@ The autouse fixture `print_results` runs after all tests: it builds a Markdown t
     assert steady["errors"] == 0, f"{overlay} must serve cleanly before it is disturbed: {steady}"
     assert steady["skipped"] == 0, "the load generator itself must keep up"
     load.reset()
+
+
+def rollout(kube: Kube, load: LoadControl, *, watch_ready: bool = False) -> tuple[Json, int]:
+    """Restart the web pods under load; return the counters of the window and the lowest ready count seen.
 ```
 
-The docstring continues (up to six clean-window attempts because new pods can answer their first requests slowly on a busy shared machine, while the rollout, spike and drain windows are measured once, strictly). The body: deploy the overlay with `deploy.sh`, set the baseline rate, wait 5 seconds, then up to six times reset the counters, wait 10 seconds and read them, stopping at the first window with zero errors; assert that window had no errors and `skipped == 0`; reset again.
+The docstring continues (up to six clean-window attempts because new pods can answer their first requests slowly on a busy shared machine, while the rollout, spike and drain windows are measured once, strictly). The body: deploy the overlay with `deploy.sh`, set the baseline rate, wait 5 seconds, then up to six times reset the counters, wait 10 seconds and read them, stopping at the first window with zero errors; assert that window had no errors and `skipped == 0`; reset again. `rollout(kube, load, watch_ready=False)` begins.
 
 ```text
-def rollout(kube: Kube, load: LoadControl, *, watch_ready: bool = False) -> tuple[Json, int]:
-    """Restart the web pods under load; return the counters of the window and the lowest ready count seen."""
+    A window in which the load generator itself started requests late (`late_starts`: a stall of the generator's
+    own threads, which a 2-second client timeout would count as a failed request) is void, not a verdict: it is
+    measured again, up to three times.
+    """
+    for attempt in range(1, REPEATS + 1):
+        counters, lowest = _rollout_once(kube, load, watch_ready=watch_ready)
+        if counters["late_starts"] == 0 or attempt == REPEATS:
+            return counters, lowest
+        print(f"window void, the generator started {counters['late_starts']} requests late: {counters}")
+        time.sleep(20)
+    raise AssertionError("unreachable")
+
+
+def _rollout_once(kube: Kube, load: LoadControl, *, watch_ready: bool) -> tuple[Json, int]:
     load.reset()
     lowest = [10_000]
     stop = threading.Event()
+```
 
+The docstring of `rollout` finishes: a window in which the load generator itself started requests late (`late_starts`: a stall of the generator's own threads) is void, not a verdict, and is measured again, up to three times. The body loops `REPEATS` times: call `_rollout_once`; if `late_starts` is zero, or this was the last attempt, return the counters and the lowest ready count; otherwise print that the window is void and wait 20 seconds for things to settle. The final `raise AssertionError("unreachable")` is for the type checker. `_rollout_once` resets the counters, prepares a list holding the lowest ready count seen and a `threading.Event`.
+
+```text
     def sample() -> None:
         while not stop.is_set():
             with contextlib.suppress(Exception):  # a failed sample is skipped, it is not a verdict
@@ -378,7 +399,7 @@ def rollout(kube: Kube, load: LoadControl, *, watch_ready: bool = False) -> tupl
     return load.reset(), lowest[0]
 ```
 
-`rollout(kube, load, watch_ready=False)` resets the counters, prepares a list holding the lowest ready count seen and a `threading.Event`, and defines `sample()`, a loop that records the minimum ready count every 0.4 seconds (`with contextlib.suppress(Exception)` ignores a failed sample: it is not a verdict). If `watch_ready` is set the sampling thread starts. Then `kubectl rollout restart deployment/web` and `rollout status` (up to 300 s), the sampler is stopped, 8 seconds pass so late failures are counted, and the function returns the counters and the lowest ready count.
+`sample()` is a loop that records the minimum ready count every 0.4 seconds (`with contextlib.suppress(Exception)` ignores a failed sample: it is not a verdict). If `watch_ready` is set the sampling thread starts. Then `kubectl rollout restart deployment/web` and `rollout status` (up to 300 s), the sampler is stopped, 8 seconds pass so late failures are counted, and the function returns the counters and the lowest ready count.
 
 ```text
 def test_done_when_1_the_naive_rollout_fails_requests(kube: Kube, load: LoadControl) -> None:
@@ -391,8 +412,11 @@ def test_done_when_1_the_naive_rollout_fails_requests(kube: Kube, load: LoadCont
     record(
         "rolling update", before=f"{counters['errors']} failed requests ({counters['connection']} connection errors)"
     )
+```
 
+Test 1: apply the naive overlay, roll under load, print the counters and assert errors above zero and some connection errors; record the "before" figure.
 
+```text
 def test_done_when_2_a_graceful_rollout_has_zero_errors_three_times(kube: Kube, load: LoadControl) -> None:
     """Readiness, graceful shutdown and a preStop delay: three rollouts in a row, zero failed requests."""
     apply(kube, "graceful", load)
@@ -402,10 +426,11 @@ def test_done_when_2_a_graceful_rollout_has_zero_errors_three_times(kube: Kube, 
         assert counters["errors"] == 0, counters
         assert counters["total"] > 1000, "the rollout must have been under real load"
         assert counters["skipped"] == 0
+        assert counters["late_starts"] == 0, "the load generator itself stalled in every attempt"
     record("rolling update", after="0 failed requests, three rollouts in a row")
 ```
 
-Test 1: apply the naive overlay, roll under load, print the counters and assert errors above zero and some connection errors; record the "before" figure. Test 2: apply the graceful overlay, do three rollouts in a row, and for each assert zero errors, more than 1000 requests (the rollout was under real load) and zero skipped; record "0 failed requests, three rollouts in a row".
+Test 2 begins: apply the graceful overlay and do three rollouts in a row, printing each; for each assert zero errors, more than 1000 requests (the rollout was under real load), zero skipped and zero late starts (the generator itself did not stall in every attempt); record "0 failed requests, three rollouts in a row".
 
 ```text
 def test_done_when_3_a_tuned_rollout_never_drops_below_six_ready(kube: Kube, load: LoadControl) -> None:
@@ -415,11 +440,12 @@ def test_done_when_3_a_tuned_rollout_never_drops_below_six_ready(kube: Kube, loa
     print(f"tuned rollout: lowest ready count sampled {lowest}, {counters}")
     assert lowest >= 6, f"ready count dipped to {lowest}"
     assert counters["errors"] == 0, counters
+    assert counters["late_starts"] == 0, "the load generator itself stalled in every attempt"
     strategy = deployment(kube)["spec"]["strategy"]["rollingUpdate"]
     assert (strategy["maxSurge"], strategy["maxUnavailable"]) == ("25%", 0)
 ```
 
-Test 3: apply the tuned overlay, roll with the ready-count sampler on, and assert the lowest ready count never fell below six, zero errors, and that the strategy is `maxSurge` 25% and `maxUnavailable` 0.
+Test 3: apply the tuned overlay, roll with the ready-count sampler on, and assert the lowest ready count never fell below six, zero errors, zero late starts, and that the strategy is `maxSurge` 25% and `maxUnavailable` 0.
 
 ```text
 def replicas_over_time(kube: Kube, load: LoadControl, seconds: int) -> tuple[list[Json], dict[str, float | None]]:

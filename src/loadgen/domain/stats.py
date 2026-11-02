@@ -28,6 +28,7 @@ class Snapshot:
     http_5xx: int
     http_other: int
     skipped: int
+    late_starts: int
     p50_ms: float
     p99_ms: float
     max_ms: float
@@ -48,6 +49,7 @@ class Snapshot:
             "http_5xx": self.http_5xx,
             "http_other": self.http_other,
             "skipped": self.skipped,
+            "late_starts": self.late_starts,
             "p50_ms": round(self.p50_ms, 1),
             "p99_ms": round(self.p99_ms, 1),
             "max_ms": round(self.max_ms, 1),
@@ -63,6 +65,7 @@ class StatsWindow:
         self._counts = dict.fromkeys(Outcome, 0)
         self._latencies: list[float] = []
         self._skipped = 0
+        self._late_starts = 0
 
     def record(self, sample: Sample) -> None:
         """Count one finished request."""
@@ -74,6 +77,11 @@ class StatsWindow:
         """Count one request that was due but not sent because every sender was busy."""
         with self._lock:
             self._skipped += 1
+
+    def late(self, count: int = 1) -> None:
+        """Count requests that started later than the generator's tolerance after they were due."""
+        with self._lock:
+            self._late_starts += count
 
     def snapshot(self) -> Snapshot:
         """Read the window without changing it."""
@@ -87,6 +95,7 @@ class StatsWindow:
             self._counts = dict.fromkeys(Outcome, 0)
             self._latencies = []
             self._skipped = 0
+            self._late_starts = 0
             return final
 
     def _build(self) -> Snapshot:
@@ -99,6 +108,7 @@ class StatsWindow:
             http_5xx=self._counts[Outcome.HTTP_5XX],
             http_other=self._counts[Outcome.HTTP_OTHER],
             skipped=self._skipped,
+            late_starts=self._late_starts,
             p50_ms=percentile(ordered, 0.50) * 1000,
             p99_ms=percentile(ordered, 0.99) * 1000,
             max_ms=(ordered[-1] * 1000) if ordered else 0.0,

@@ -443,6 +443,27 @@ def test_a_rate_outside_the_range_is_rejected(rate):
 
 After a one-second stall, 11 sends are due at once (the missed ones are caught up). Changing from 10 to 100 per second at time 0 makes five sends due by 0.05 (no burst, no gap). Rates 0, -5 and 10,001 are rejected by both the constructor and `set_rate`.
 
+```text
+def test_the_pacer_reports_how_overdue_the_oldest_send_is():
+    pacer = Pacer(10, start=0.0)
+    assert pacer.lateness(0.0) == 0.0
+    assert pacer.lateness(0.35) == pytest.approx(0.35)
+    pacer.due(0.35)
+    assert pacer.lateness(0.35) == 0.0
+
+
+def test_late_starts_are_counted_and_cleared_by_reset():
+    window = StatsWindow()
+    window.late()
+    window.late(3)
+    assert window.snapshot().late_starts == 4
+    assert window.snapshot().as_dict()["late_starts"] == 4
+    assert window.reset().late_starts == 4
+    assert window.snapshot().late_starts == 0
+```
+
+`test_the_pacer_reports_how_overdue_the_oldest_send_is`: at rate 10 with start 0, `lateness(0.0)` is 0.0, at 0.35 it is 0.35 seconds overdue, and after `due(0.35)` has taken the owed sends it is 0.0 again. `test_late_starts_are_counted_and_cleared_by_reset`: `late()` and `late(3)` give four late starts in the snapshot and in its dictionary form, and `reset()` returns the four and starts a window at zero.
+
 ### `tests/unit/test_loadgen_infrastructure.py`
 
 ```text
@@ -455,7 +476,7 @@ import pytest
 
 from loadgen.application.runner import LoadRunner
 from loadgen.domain.outcome import Outcome
-from loadgen.infrastructure.http_requester import HttpRequester
+from loadgen.infrastructure.http_requester import HttpRequester, PortQuarantine
 from loadgen.infrastructure.runtime import PoolExecutor, SystemClock
 from loadgen.infrastructure.settings import ConfigurationError, Settings
 from loadgen.interfaces.control import make_server
@@ -576,6 +597,48 @@ def test_the_control_api_reads_resets_and_changes_the_rate(target):
 ```
 
 The control API test builds a real `LoadRunner` at 50 requests per second against the local target, serves the control API on port 0 and checks: `/healthz` is alive; `POST /rate` with `{"rps": 80}` returns 80.0; a rate of 0 and a body without `rps` give 400; unknown paths give 404 for GET and POST; after half a second `POST /reset` returns more than 5 requests and no errors, and a following `/stats` has fewer requests (the window was cleared). `finally` stops the runner and the server.
+
+```text
+def test_a_held_back_port_is_forgotten_after_its_time():
+    now = [0.0]
+    quarantine = PortQuarantine(hold_seconds=10, clock=lambda: now[0])
+    quarantine.add(40000)
+    assert 40000 in quarantine
+    assert 40001 not in quarantine
+    assert len(quarantine) == 1
+    now[0] = 10.0
+    assert 40000 not in quarantine
+    assert len(quarantine) == 0
+
+
+def test_a_failed_request_holds_its_source_port_back_and_a_good_one_does_not(target):
+    requester = HttpRequester(target + "/200", 2)
+    assert requester.request().outcome is Outcome.OK
+    assert len(requester.quarantine) == 0
+    failing = HttpRequester(target + "/503", 2)
+    assert failing.request().outcome is Outcome.HTTP_5XX
+    assert len(failing.quarantine) == 1
+```
+
+`test_a_held_back_port_is_forgotten_after_its_time` uses a mutable list `now` as a fake clock: a port added with a 10-second hold is in the quarantine, another port is not, the length is 1; when the clock reaches 10.0 the port is forgotten and the length is 0. `test_a_failed_request_holds_its_source_port_back_and_a_good_one_does_not`: a request answered 200 leaves the quarantine empty; one answered 503 (an error) leaves exactly one port held.
+
+```text
+def test_a_timeout_holds_its_source_port_back_and_a_new_request_avoids_it():
+    import socket
+
+    with socket.socket() as silent:
+        silent.bind(("127.0.0.1", 0))
+        silent.listen(1)
+        requester = HttpRequester(f"http://127.0.0.1:{silent.getsockname()[1]}/", 0.2)
+        assert requester.request().outcome is Outcome.TIMEOUT
+        held = next(iter(requester.quarantine._until))
+        for _ in range(20):
+            probe = requester._bound_socket()
+            assert probe.getsockname()[1] != held
+            probe.close()
+```
+
+`test_a_timeout_holds_its_source_port_back_and_a_new_request_avoids_it` opens a socket that listens but never answers, so a request with a 0.2-second timeout is a `TIMEOUT`. The quarantine's single port is read from its private dictionary (`# noqa: SLF001` tells ruff the private access is deliberate). Then twenty new bound sockets are made with `_bound_socket()` and none of them gets the held port; each is closed.
 
 ### `tests/unit/test_loadgen_runner.py`
 
@@ -718,9 +781,40 @@ def test_reset_hands_back_the_window_and_stop_returns_the_final_reading():
     runner.start()
     final = runner.stop()
     assert final.errors == 0
+
+
+def test_a_stalled_pacer_thread_counts_its_overdue_requests_as_late_starts():
+    clock = FakeClock()
+    runner = LoadRunner(ScriptedRequester([]), clock, Immediate(), rate_per_second=10, max_in_flight=100)
+    runner.tick()
+    clock.time = 1.0  # the pacer thread was held up for a second
+    runner.tick()
+    assert runner.snapshot().late_starts == 10
 ```
 
-`reset()` hands back the window (one timeout) and starts an empty one; `start()` then `stop()` returns a final reading with no errors.
+`reset()` hands back the window (one timeout) and starts an empty one; `start()` then `stop()` returns a final reading with no errors. `test_a_stalled_pacer_thread_counts_its_overdue_requests_as_late_starts`: after one tick at time 0, the fake clock jumps to 1.0 (the pacer thread was held up for a second); the next tick finds ten sends overdue by about a second, so `late_starts` is 10.
+
+```text
+def test_a_sender_that_starts_late_counts_a_late_start():
+    clock = FakeClock()
+    held = Held()
+    runner = LoadRunner(ScriptedRequester([]), clock, held, rate_per_second=10, max_in_flight=5)
+    runner.tick()
+    clock.time = 0.5  # the sender threads were busy for half a second before running the request
+    held.release()
+    assert runner.snapshot().late_starts == 1
+
+
+def test_a_prompt_sender_is_not_late():
+    clock = FakeClock()
+    runner = LoadRunner(ScriptedRequester([]), clock, Immediate(), rate_per_second=10, max_in_flight=5)
+    for _ in range(5):
+        runner.tick()
+        clock.time += 0.1
+    assert runner.snapshot().late_starts == 0
+```
+
+`test_a_sender_that_starts_late_counts_a_late_start`: one request is submitted to the `Held` executor at time 0, the clock moves to 0.5 (the senders were busy) and the request is released; it started 0.5 s after it was due, so one late start is counted. `test_a_prompt_sender_is_not_late`: five ticks 0.1 s apart with an immediate executor produce no late starts.
 
 
 ## 6. Try it yourself

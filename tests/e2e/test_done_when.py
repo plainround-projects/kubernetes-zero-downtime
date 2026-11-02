@@ -26,6 +26,7 @@ pytestmark = pytest.mark.e2e
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE_RPS = 100
 SPIKE_RPS = 300
+REPEATS = 3
 SPIKE_SECONDS = int(os.environ.get("SPIKE_SECONDS", "300"))
 RESULTS: dict[str, list[str]] = {}
 
@@ -96,7 +97,22 @@ def apply(kube: Kube, overlay: str, load: LoadControl) -> None:
 
 
 def rollout(kube: Kube, load: LoadControl, *, watch_ready: bool = False) -> tuple[Json, int]:
-    """Restart the web pods under load; return the counters of the window and the lowest ready count seen."""
+    """Restart the web pods under load; return the counters of the window and the lowest ready count seen.
+
+    A window in which the load generator itself started requests late (`late_starts`: a stall of the generator's
+    own threads, which a 2-second client timeout would count as a failed request) is void, not a verdict: it is
+    measured again, up to three times.
+    """
+    for attempt in range(1, REPEATS + 1):
+        counters, lowest = _rollout_once(kube, load, watch_ready=watch_ready)
+        if counters["late_starts"] == 0 or attempt == REPEATS:
+            return counters, lowest
+        print(f"window void, the generator started {counters['late_starts']} requests late: {counters}")
+        time.sleep(20)
+    raise AssertionError("unreachable")
+
+
+def _rollout_once(kube: Kube, load: LoadControl, *, watch_ready: bool) -> tuple[Json, int]:
     load.reset()
     lowest = [10_000]
     stop = threading.Event()
@@ -138,6 +154,7 @@ def test_done_when_2_a_graceful_rollout_has_zero_errors_three_times(kube: Kube, 
         assert counters["errors"] == 0, counters
         assert counters["total"] > 1000, "the rollout must have been under real load"
         assert counters["skipped"] == 0
+        assert counters["late_starts"] == 0, "the load generator itself stalled in every attempt"
     record("rolling update", after="0 failed requests, three rollouts in a row")
 
 
@@ -148,6 +165,7 @@ def test_done_when_3_a_tuned_rollout_never_drops_below_six_ready(kube: Kube, loa
     print(f"tuned rollout: lowest ready count sampled {lowest}, {counters}")
     assert lowest >= 6, f"ready count dipped to {lowest}"
     assert counters["errors"] == 0, counters
+    assert counters["late_starts"] == 0, "the load generator itself stalled in every attempt"
     strategy = deployment(kube)["spec"]["strategy"]["rollingUpdate"]
     assert (strategy["maxSurge"], strategy["maxUnavailable"]) == ("25%", 0)
 

@@ -120,3 +120,31 @@ def test_reset_hands_back_the_window_and_stop_returns_the_final_reading():
     runner.start()
     final = runner.stop()
     assert final.errors == 0
+
+
+def test_a_stalled_pacer_thread_counts_its_overdue_requests_as_late_starts():
+    clock = FakeClock()
+    runner = LoadRunner(ScriptedRequester([]), clock, Immediate(), rate_per_second=10, max_in_flight=100)
+    runner.tick()
+    clock.time = 1.0  # the pacer thread was held up for a second
+    runner.tick()
+    assert runner.snapshot().late_starts == 10
+
+
+def test_a_sender_that_starts_late_counts_a_late_start():
+    clock = FakeClock()
+    held = Held()
+    runner = LoadRunner(ScriptedRequester([]), clock, held, rate_per_second=10, max_in_flight=5)
+    runner.tick()
+    clock.time = 0.5  # the sender threads were busy for half a second before running the request
+    held.release()
+    assert runner.snapshot().late_starts == 1
+
+
+def test_a_prompt_sender_is_not_late():
+    clock = FakeClock()
+    runner = LoadRunner(ScriptedRequester([]), clock, Immediate(), rate_per_second=10, max_in_flight=5)
+    for _ in range(5):
+        runner.tick()
+        clock.time += 0.1
+    assert runner.snapshot().late_starts == 0
