@@ -26,6 +26,8 @@ The manifests are the lesson's steps as a chain of overlays, each adding only wh
 
 ## Data flow
 
+Drawn versions of this figure and of the walk-through: [the architecture](docs/diagrams/architecture.svg) and [one run](docs/diagrams/flow.svg).
+
 ```mermaid
 flowchart LR
     subgraph cluster["Kubernetes cluster (k3d: 1 server, 3 agents)"]

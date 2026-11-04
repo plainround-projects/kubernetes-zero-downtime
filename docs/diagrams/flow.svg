@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="796" viewBox="0 0 1200 796" role="img" aria-labelledby="t d">
+<title id="t">One rollout under load</title>
+<desc id="d">Eight rows top to bottom across five lanes. The load generator resets its counters while traffic flows. The Deployment starts new pods, each warms up behind a closed port and joins Service web only when ready. In the amber row, the naive setup sends traffic before the pod is ready and gets connection refused. The Deployment then deletes an old pod, which sleeps fifteen seconds in preStop, drains on SIGTERM and exits. The load generator reads errors: 0.</desc>
+<style>
+:root{--paper:#ffffff;--ink:#10243d;--mute:#52677f;--accent:#0a6aa8;--good:#19743f;--warn:#8a5a00}
+text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;fill:var(--ink)}
+.title{font-family:Georgia,'Iowan Old Style','Times New Roman',serif;font-size:36px}
+.caption{font-size:16px;fill:var(--mute)}
+.name{font-size:20px;font-weight:600}
+.lane{font-size:17px;font-weight:600}
+.sub{font-size:15px;fill:var(--mute)}
+.label{font-size:15px}
+.tag{font-size:15px;fill:var(--mute)}
+.num{font-size:15px;font-weight:700;fill:var(--paper)}
+.legend{font-size:14px;fill:var(--mute)}
+.t-accent{fill:var(--accent)}
+.t-good{fill:var(--good)}
+.t-warn{fill:var(--warn)}
+.t-ink{fill:var(--ink)}
+.b{font-weight:600}
+.paper{fill:var(--paper);stroke:var(--mute);stroke-opacity:.3}
+.grid{fill:url(#grid)}
+.boundary{fill:var(--mute);fill-opacity:.035;stroke:var(--mute);stroke-opacity:.7;stroke-dasharray:6 5}
+.svc{fill:var(--accent);fill-opacity:.08;stroke:var(--accent);stroke-width:1.25}
+.store{fill:var(--mute);fill-opacity:.1;stroke:var(--mute);stroke-width:1.25}
+.rim{fill:none;stroke:var(--mute);stroke-width:1.25}
+.actor{fill:none;stroke:var(--mute);stroke-width:1.25}
+.slot{fill:var(--accent);fill-opacity:.14;stroke:var(--accent);stroke-width:1}
+.note{fill:var(--warn);fill-opacity:.09;stroke:var(--warn);stroke-width:1}
+.win{fill:var(--good);fill-opacity:.09;stroke:var(--good);stroke-width:1}
+.hair{fill:none;stroke:var(--mute);stroke-opacity:.4;stroke-width:1}
+.zone{fill:var(--accent);fill-opacity:.045;stroke:var(--accent);stroke-width:1.25;stroke-dasharray:6 5}
+.stop{fill:none;stroke:var(--warn);stroke-width:4;stroke-linecap:round}
+.mask{fill:var(--paper)}
+.sync,.async,.read,.fail,.ok{fill:none}
+.sync{stroke:var(--accent);stroke-width:1.75;marker-end:url(#a-sync)}
+.async{stroke:var(--accent);stroke-width:1.75;stroke-dasharray:8 6;marker-end:url(#a-async)}
+.read{stroke:var(--mute);stroke-width:1.75;stroke-linecap:round;stroke-dasharray:1 6;marker-end:url(#a-read)}
+.fail{stroke:var(--warn);stroke-width:2;marker-end:url(#a-fail)}
+.ok{stroke:var(--good);stroke-width:1.75;marker-end:url(#a-ok)}
+.dot{fill:var(--accent)}
+.dot-w{fill:var(--warn)}
+.dot-g{fill:var(--good)}
+.head-sync,.head-async{stroke:var(--accent)}
+.head-sync{fill:var(--accent)}
+.head-async,.head-read{fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.head-read{stroke:var(--mute)}
+.head-fail{fill:var(--warn)}
+.head-ok{fill:var(--good)}
+.gridline{fill:none;stroke:var(--mute);stroke-opacity:.09}
+</style>
+<defs>
+<pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path class="gridline" d="M40 0H0V40"/></pattern>
+<marker id="a-sync" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-sync" d="M0 0L10 5L0 10z"/></marker>
+<marker id="a-async" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-async" d="M1 1L9 5L1 9"/></marker>
+<marker id="a-read" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-read" d="M1 1L9 5L1 9"/></marker>
+<marker id="a-fail" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-fail" d="M0 0L10 5L0 10z"/></marker>
+<marker id="a-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-ok" d="M0 0L10 5L0 10z"/></marker>
+</defs>
+<rect class="paper" x="0.5" y="0.5" width="1199" height="795" rx="16"/>
+<rect class="grid" x="1" y="1" width="1198" height="794" rx="16"/>
+<text class="title" x="48" y="68">A rollout that drops nothing</text>
+<text class="caption" x="48" y="100">make run. Amber: without a readiness probe, new pods refuse the first second of traffic.</text>
+<rect class="svc" x="400" y="128" width="120" height="48" rx="10"/>
+<text class="lane" x="460" y="148" text-anchor="middle">Load</text>
+<text class="lane" x="460" y="168" text-anchor="middle">generator</text>
+<rect class="svc" x="540" y="128" width="140" height="48" rx="10"/>
+<text class="lane" x="610" y="158" text-anchor="middle">Service web</text>
+<rect class="svc" x="700" y="128" width="130" height="48" rx="10"/>
+<text class="lane" x="765" y="158" text-anchor="middle">Deployment</text>
+<rect class="svc" x="845" y="128" width="120" height="48" rx="10"/>
+<text class="lane" x="905" y="158" text-anchor="middle">New pod</text>
+<rect class="svc" x="1015" y="128" width="120" height="48" rx="10"/>
+<text class="lane" x="1075" y="158" text-anchor="middle">Old pod</text>
+<path class="hair" d="M460 176V676M610 176V420M765 176V484M905 176V420M1075 176V612"/>
+<path class="hair" d="M66 216V664"/>
+<circle class="dot" cx="66" cy="216" r="15"/><text class="num" x="66" y="221" text-anchor="middle">1</text>
+<text class="label b t-ink" x="96" y="212">loadctl.sh reset</text>
+<text class="sub" x="96" y="232">counters reset, 100 req/s</text>
+<rect class="slot" x="454" y="198" width="12" height="36" rx="4"/>
+<text class="label t-accent" x="476" y="221">reset counters</text>
+<circle class="dot" cx="66" cy="280" r="15"/><text class="num" x="66" y="285" text-anchor="middle">2</text>
+<text class="label b t-ink" x="96" y="276">rollout restart adds pods</text>
+<text class="sub" x="96" y="296">maxSurge 25%, maxUnavailable 0</text>
+<path class="sync" d="M765 280H905"/>
+<text class="label t-accent" x="781" y="270">create pod</text>
+<circle class="dot" cx="66" cy="344" r="15"/><text class="num" x="66" y="349" text-anchor="middle">3</text>
+<text class="label b t-ink" x="96" y="340">A new pod warms up</text>
+<text class="sub" x="96" y="360">port closed 1 s, then /readyz</text>
+<path class="sync" d="M905 344H610"/>
+<text class="label t-accent" x="626" y="334">/readyz ok</text>
+<circle class="dot-w" cx="66" cy="408" r="15"/><text class="num" x="66" y="413" text-anchor="middle">3x</text>
+<text class="label b t-warn" x="96" y="404">Naive: traffic before ready</text>
+<text class="sub" x="96" y="424">connection refused for 1 s</text>
+<path class="fail" d="M610 408H905"/>
+<text class="label t-warn" x="626" y="398">refused</text>
+<circle class="dot" cx="66" cy="472" r="15"/><text class="num" x="66" y="477" text-anchor="middle">4</text>
+<text class="label b t-ink" x="96" y="468">An old pod is deleted</text>
+<text class="sub" x="96" y="488">once a new pod is ready</text>
+<path class="sync" d="M765 472H1075"/>
+<text class="label t-accent" x="921" y="462">delete old</text>
+<circle class="dot" cx="66" cy="536" r="15"/><text class="num" x="66" y="541" text-anchor="middle">5</text>
+<text class="label b t-ink" x="96" y="532">preStop sleeps 15 s</text>
+<text class="sub" x="96" y="552">still serving, endpoints update</text>
+<rect class="slot" x="1069" y="518" width="12" height="36" rx="4"/>
+<text class="label t-accent" x="1059" y="541" text-anchor="end">preStop 15 s</text>
+<circle class="dot" cx="66" cy="600" r="15"/><text class="num" x="66" y="605" text-anchor="middle">6</text>
+<text class="label b t-ink" x="96" y="596">SIGTERM, then a clean exit</text>
+<text class="sub" x="96" y="616">in flight finish, 40 s grace</text>
+<rect class="slot" x="1069" y="582" width="12" height="36" rx="4"/>
+<text class="label t-accent" x="1059" y="605" text-anchor="end">SIGTERM, exit</text>
+<circle class="dot-g" cx="66" cy="664" r="15"/><text class="num" x="66" y="669" text-anchor="middle">7</text>
+<text class="label b t-ink" x="96" y="660">The counters are read</text>
+<text class="sub" x="96" y="680">8 s after the last replace</text>
+<rect class="slot" x="454" y="646" width="12" height="36" rx="4"/>
+<path class="ok" d="M472 664H540"/>
+<rect class="win" x="540" y="644" width="130" height="40" rx="10"/>
+<text class="label b t-good" x="556" y="669">errors: 0</text>
+<path class="sync" d="M48 752H112"/><text class="legend" x="124" y="757">sync call</text>
+<path class="fail" d="M696 752H760"/><text class="legend" x="772" y="757">failure path</text>
+<path class="ok" d="M928 752H992"/><text class="legend" x="1004" y="757">result</text>
+</svg>

@@ -9,6 +9,24 @@ A small HTTP service on a four-node k3d cluster, under constant load from an in-
 | **Level** | Intermediate |
 | **Architecture** | [ARCHITECTURE.md](ARCHITECTURE.md), decisions in [docs/adr](docs/adr) |
 
+## Architecture
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/architecture-dark.svg">
+  <img alt="In a k3d cluster, a load generator on the tainted server node sends 100 requests a second to Service web, which routes only to ready web pods on worker nodes 1, 2 and 3, while the HPA scales the pods from 6 to 20 and the disruption budget allows one voluntary disruption at a time." src="docs/diagrams/architecture.svg">
+</picture>
+
+The generator counts every failed request; the amber notes are the naive overlay that refuses connections and the graceful overlay that ends at zero errors.
+
+## How one run flows
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/flow-dark.svg">
+  <img alt="One rollout under load: the generator resets its counters, the Deployment adds pods that join Service web only when ready, an old pod is deleted and drains through preStop and SIGTERM, and the generator reads errors: 0." src="docs/diagrams/flow.svg">
+</picture>
+
+The amber row is the naive setup sending traffic to a pod that is still warming up; with readiness and preStop the run ends with no errors.
+
 ## Prerequisites
 
 | Tool | Version | Used for |
